@@ -67,4 +67,3 @@ if __name__ == '__main__':
 
 #Always pull latest data
 #Graph should be dynamic, use plotly instead of st.line_chart
-
