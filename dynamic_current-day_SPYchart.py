@@ -1,11 +1,12 @@
-import os
+import os, pdb
 import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 import streamlit as st
-#I added the last two to make the program operate on last business day. Not sure if that was necessary but if it works it works right?
 from datetime import date
 from pandas.tseries.offsets import BDay
+
+import make_charts as mc
 
 def establish_connection_source():
     server = os.getenv('sra_azure_mysql_server')
@@ -52,12 +53,20 @@ def main():
     cdate = date.today()
     con = establish_connection_source()
     data = fetch_yahoo_intraday(con, ticker, cdate)
-       
+    # last_b_day = cdate
+    # while data == "Empty DataFrame":
+    #     print("no data")
+    #     last_b_day = last_b_day - 1
+    #     data = fetch_yahoo_intraday(con, ticker, last_b_day)
+    # print("----------")
+    # print(data)
+    # print("----------")
+    to_graph = data[['asof','close']].sort_values(by=['asof']).set_index('asof')
+    to_graph = to_graph.sort_index()
+    intraday_chart = mc.plotly_intraday_chart(to_graph, '{}'.format(ticker.upper()), '', height=300, pct=False)
+
     if not data.empty:
-        st.write('Data Retrieved:')
-        st.write(data)
-        #data.set_index needs to be changed to cater to plotly_chart function syntax
-        st.plotly_chart(data.set_index('asof')['close'], use_container_width=True)
+        st.plotly_chart(intraday_chart, use_container_width=True)
     else:
         st.write('No data available for the selected date and ticker.')
 
@@ -66,4 +75,3 @@ if __name__ == '__main__':
 
 
 #Always pull latest data
-#Graph should be dynamic, use plotly instead of st.line_chart
