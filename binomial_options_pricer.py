@@ -4,92 +4,14 @@ from typing import Tuple, List
 from scipy.stats import binom, norm
 import math
 
-def get_user_inputs() -> Tuple[float, float, float, float, float, int, str]:
-    """Get user inputs for option pricing parameters."""
-    print("\nPlease enter the following parameters:")
-    
-    # Get current stock price
-    while True:
-        try:
-            S = float(input("Current stock price ($): "))
-            if S <= 0:
-                print("Stock price must be positive")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number")
-    
-    # Get strike price
-    while True:
-        try:
-            K = float(input("Strike price ($): "))
-            if K <= 0:
-                print("Strike price must be positive")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number")
-    
-    # Get time to expiration
-    while True:
-        try:
-            T = float(input("Time to expiration (in years): "))
-            if T <= 0:
-                print("Time to expiration must be positive")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number")
-    
-    # Get risk-free rate
-    while True:
-        try:
-            r = float(input("Risk-free interest rate (as decimal, e.g., 0.05 for 5%): "))
-            if r < 0:
-                print("Risk-free rate cannot be negative")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number")
-    
-    # Get volatility
-    while True:
-        try:
-            sigma = float(input("Volatility (as decimal, e.g., 0.20 for 20%): "))
-            if sigma <= 0:
-                print("Volatility must be positive")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number")
-    
-    # Get number of time steps
-    while True:
-        try:
-            n = int(input("Number of time steps (recommended: 30-200): "))
-            if n <= 0:
-                print("Number of steps must be positive")
-                continue
-            if n > 1000:
-                print("\nWarning: Using more than 1000 steps is not recommended because:")
-                print("1. It will be computationally expensive")
-                print("2. The improvement in accuracy is negligible")
-                print("3. It may cause memory issues")
-                proceed = input("Do you want to proceed anyway? (y/n): ").lower()
-                if proceed != 'y':
-                    continue
-            break
-        except ValueError:
-            print("Please enter a valid integer")
-    
-    # Get option type
-    while True:
-        option_type = input("Option type (call/put): ").lower()
-        if option_type in ['call', 'put']:
-            break
-        print("Please enter either 'call' or 'put'")
-    
-    return S, K, T, r, sigma, n, option_type
+S = 100
+K = 100
+T = 1  # Time to expiration in years (e.g., 1 year)
+r = 0.05
+sigma = 0.2
+n = 10 # Number of time steps in the binomial tree
+option_type = 'call'
+
 
 def calculate_tree_size(n: int) -> int:
     """
@@ -244,7 +166,7 @@ def plot_binomial_tree(stock_tree: np.ndarray, option_tree: np.ndarray,
     plt.xlabel('Time Steps')
     plt.ylabel('Stock Price')
     plt.grid(True)
-    plt.legend()
+    plt.legend(loc="upper left")
     plt.show()
 
 def binomial_option_pricer(S: float, K: float, T: float, r: float, sigma: float, 
@@ -350,7 +272,7 @@ def plot_custom_tree(stock_tree: np.ndarray, prob_tree: np.ndarray,
     plt.xlabel('Time Steps')
     plt.ylabel('Stock Price')
     plt.grid(True)
-    plt.legend()
+    plt.legend(loc="upper left")
     plt.show()
 
 def black_scholes(S: float, K: float, T: float, r: float, sigma: float, option_type: str = 'call') -> float:
@@ -367,48 +289,13 @@ def black_scholes(S: float, K: float, T: float, r: float, sigma: float, option_t
     
     return price
 
-def demonstrate_convergence(S: float, K: float, T: float, r: float, sigma: float, 
-                          option_type: str = 'call') -> None:
-    """
-    Demonstrate how the option price converges as we increase the number of time steps.
-    """
-    # Calculate Black-Scholes price first
-    bs_price = black_scholes(S, K, T, r, sigma, option_type)
-    
-    print("\nDemonstrating Convergence with Different Step Sizes:")
-    print("----------------------------------------------------")
-    print(f"Stock Price: ${S:.2f}")
-    print(f"Strike Price: ${K:.2f}")
-    print(f"Time to Expiration: {T:.2f} years")
-    print(f"Risk-free Rate: {r*100:.2f}%")
-    print(f"Volatility: {sigma*100:.2f}%")
-    print(f"Option Type: {option_type.capitalize()}")
-    print(f"\nBlack-Scholes Price: ${bs_price:.6f}")
-    print("\nStep Size Analysis:")
-    print("Steps | Option Price | Change from Previous | Diff from BS | Tree Parameters")
-    print("------------------------------------------------------------------------")
-    
-    prev_price = None
-    step_sizes = [10, 20, 30, 50, 100, 200, 500]
-    
-    for n in step_sizes:
-        price, _, _ = binomial_option_pricer(S, K, T, r, sigma, n, option_type)
-        change = "N/A" if prev_price is None else f"${price - prev_price:.6f}"
-        diff_from_bs = f"${price - bs_price:.6f}"
-        u, d, p, dt = binomial_tree_parameters(S, K, T, r, sigma, n)
-        print(f"{n:5d} | ${price:.6f} | {change:20s} | {diff_from_bs:12s} | u={u:.4f}, d={d:.4f}, p={p:.4f}")
-        prev_price = price
-    
-    print("\nNote: The binomial price should converge to the Black-Scholes price")
-    print("      as the number of steps increases.")
-    print("      If it doesn't, there might be an issue with the implementation.")
 
 def main():
     print("Welcome to the Binomial Options Pricer!")
     print("----------------------------------------")
     
     # Get user inputs
-    S, K, T, r, sigma, n, option_type = get_user_inputs()
+    #S, K, T, r, sigma, n, option_type = get_user_inputs()
     
     # Calculate Black-Scholes price for comparison
     bs_price = black_scholes(S, K, T, r, sigma, option_type)
