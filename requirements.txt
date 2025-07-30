@@ -1,5 +1,4 @@
-numpy>=1.24.0
-scipy>=1.10.0
-matplotlib>=3.7.0
 pandas>=2.0.0
-streamlit>=1.22.0 
+numpy>=1.24.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0 
