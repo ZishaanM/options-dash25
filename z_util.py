@@ -73,18 +73,20 @@ def get_logger(name):
 
 def connect_gcp():
     """
-    Connect to GCP MySQL database
+    Connect to GCP PostgreSQL database (home use only).
     Returns:
         con: dictionary with connect_string and engine
     """
-    
-    server = os.getenv('gcp_server')
+    # Always use the same credentials and always grab gcp_server
     username = os.getenv('gcp_username')
     userpwd = os.getenv('gcp_password')
+    server = os.getenv('gcp_server')
+    #server = '67.172.197.116:5432'
+    #server = '34.150.156.184:5432'
+
     con = {}
     db = 'optionsDB'
     connect_string = ''.join(['postgresql+psycopg2://', username, ':', userpwd, '@', server, '/', db])
-    #connect_string = "postgresql+psycopg2://optionsDB:z1sh0PT10Neleph%40ntSQL@34.150.156.184:5432/optionsDB"
     con['connect_string'] = connect_string
     con['engine'] = sa.create_engine(connect_string, echo=False)
     return con

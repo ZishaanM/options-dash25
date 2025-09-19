@@ -3,15 +3,40 @@ import numpy as np
 import sqlalchemy as sa
 from sqlalchemy import text
 import scipy.stats as st
+from datetime import datetime, time
 
 import z_util as zu
+
+
+def convert_time_to_datetime(date_str: str, time_int: int) -> pd.Timestamp:
+    """
+    Convert date string and time integer to pandas datetime
+    Args:
+        date_str: Date in format 'YYYYMMDD'
+        time_int: Time in format HHMM (e.g., 930 for 9:30, 1500 for 15:00)
+    Returns:
+        pd.Timestamp object
+    """
+    # Convert time integer to hours and minutes
+    hours = int(time_int // 100)
+    minutes = int(time_int % 100)
+    
+    # Parse date string
+    year = int(date_str[:4])
+    month = int(date_str[4:6])
+    day = int(date_str[6:8])
+    
+    return pd.Timestamp(year=year, month=month, day=day, hour=hours, minute=minutes)
 
 
 
 table = 'returns'
 logger = zu.get_logger(__name__)
 
-def find_sim_history(reference_day: pd.Series,
+reference_date = '20071019'
+time = 1200
+
+def find_sim_history(reference_day: pd.DataFrame,
                      ticker: str) -> pd.DataFrame:
     """
     Find history that is most similar to the current day's price pattern
@@ -23,8 +48,8 @@ def find_sim_history(reference_day: pd.Series,
     logger.info(f"Starting similarity search for ticker: {ticker}")
     
     table_row = ["ret_from_open", "ret_from_p_close", "ret_from_high", "ret_from_low", "ret_to_close"]
-    current_day_returns = [float(current_day[row].iloc[0]) if row in current_day.columns and not pd.isna(current_day[row].iloc[0]) else None for row in table_row]
-    curr_time = int(current_day['time'].iloc[0])  # Convert to native Python int
+    current_day_returns = [float(reference_day[row].iloc[0]) if row in reference_day.columns and not pd.isna(reference_day[row].iloc[0]) else None for row in table_row]
+    curr_time = int(reference_day['time'].iloc[0])  # Convert to native Python int
     
     logger.info(f"Current time: {curr_time}, Returns: {current_day_returns}")
     
@@ -71,6 +96,11 @@ def find_sim_history(reference_day: pd.Series,
             break
 
     logger.info(f"Similarity search completed. Final threshold: {threshold}, Patterns found: {len(df)}")
+    
+    # Add datetime column to the result
+    if not df.empty:
+        df['datetime'] = df.apply(lambda row: convert_time_to_datetime(str(row['date']), int(row['time'])), axis=1)
+    
     return df, threshold
 
 
@@ -78,6 +108,7 @@ def pred_ret(similar_history: pd.DataFrame) -> float:
     """
     Predict the return of the current day based on the similar historical patterns
     """
+    
     logger.info(f"Calculating predictions from {len(similar_history)} similar patterns")
     
     avg_ret_to_close = similar_history["ret_to_close"].mean()
@@ -96,8 +127,7 @@ def pred_ret(similar_history: pd.DataFrame) -> float:
 if __name__ == "__main__":
     logger.info("Starting main execution")
     
-    reference_date = '20010910'
-    time = '1200'
+    # Use the module-level variables (already defined above)
     ticker = "SPY"  # Example ticker
     logger.info(f"Analyzing {ticker} for date {reference_date} at time {time}")
     
