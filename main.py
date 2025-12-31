@@ -6,7 +6,13 @@ import scipy.stats as st
 from datetime import datetime, time
 
 import z_util as zu
+from config import reference_date, reference_time
 
+table = 'returns'
+logger = zu.get_logger(__name__)
+
+# Default ticker - can be overridden when calling functions
+DEFAULT_TICKER = "SPY"
 
 def convert_time_to_datetime(date_str: str, time_int: int) -> pd.Timestamp:
     """
@@ -28,13 +34,6 @@ def convert_time_to_datetime(date_str: str, time_int: int) -> pd.Timestamp:
     
     return pd.Timestamp(year=year, month=month, day=day, hour=hours, minute=minutes)
 
-
-
-table = 'returns'
-logger = zu.get_logger(__name__)
-
-reference_date = '20071019'
-time = 1200
 
 def find_sim_history(reference_day: pd.DataFrame,
                      ticker: str) -> pd.DataFrame:
@@ -103,7 +102,6 @@ def find_sim_history(reference_day: pd.DataFrame,
     
     return df, threshold
 
-
 def pred_ret(similar_history: pd.DataFrame) -> float:
     """
     Predict the return of the current day based on the similar historical patterns
@@ -123,16 +121,244 @@ def pred_ret(similar_history: pd.DataFrame) -> float:
     
     return avg_ret_to_close, CI, std_ret_to_close
 
+def black_scholes_price(S, K, T_hours, r, sigma, option_type='call'):
+    """
+    Calculate the Black-Scholes price for a European option.
+
+    Parameters:
+    S : float
+        Current price of the underlying asset
+    K : float
+        Strike price of the option
+    T_hours : float
+        Time to expiration in hours
+    r : float
+        Risk-free interest rate (annualized, as a decimal, e.g., 0.05 for 5%)
+    sigma : float
+        Volatility of the underlying asset (annualized, as a decimal)
+    option_type : str
+        'call' for call option, 'put' for put option
+
+    Returns:
+    float
+        Theoretical price of the option
+    """
+    from math import log, sqrt, exp
+    from scipy.stats import norm
+
+    # Convert hours to years (assuming 252 trading days/year, 6.5 trading hours/day)
+    trading_hours_per_year = 252 * 6.5
+    T = T_hours / trading_hours_per_year
+
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+
+    d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+    d2 = d1 - sigma * sqrt(T)
+
+    if option_type == 'call':
+        price = S * norm.cdf(d1) - K * exp(-r * T) * norm.cdf(d2)
+    elif option_type == 'put':
+        price = K * exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+    else:
+        raise ValueError("option_type must be 'call' or 'put'")
+
+    return price
+
+def implied_vol():
+    """
+    Calculate the implied volatility of an option
+    """
+    return 0.32161
+
+def calc_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma_price, upper_1sigma_price):
+    """
+    Calculate options data and return a complete table
+    """
+    rows = []
+    S = current_price
+    K = round(S - 10)
+    T_hours = (1600 - reference_time)
+    r = 0.03961
+    sigma = implied_vol()
+    option_type = "call" if option_switch else "put"
+    
+    for i in range(15):        
+        price = black_scholes_price(S, K, T_hours, r, sigma, option_type)
+        buy_recommendation = ""
+        if option_type == "call":
+            intrinsic_value = max(0, S - K - price)
+            break_even = K + price
+            if break_even < lower_price:
+                buy_recommendation = "STRONG YES"
+            elif break_even < lower_1sigma_price:
+                buy_recommendation = "Yes"
+            elif break_even < upper_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_price:
+                buy_recommendation = "No"
+            else:
+                buy_recommendation = "STRONG NO"
+        else:  # put
+            intrinsic_value = max(0, K - S - price)
+            break_even = K - price
+            if break_even < lower_price:
+                buy_recommendation = "STRONG NO"
+            elif break_even < lower_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_price:
+                buy_recommendation = "Yes"
+            else:
+                buy_recommendation = "STRONG YES"
+        rows.append({
+            "Strike": K,
+            "Type": option_type.capitalize(),
+            "Time to Expiration": f"{T_hours*60:.1f} minutes",
+            "Theoretical Price": f"${price:.2f}",
+            "Buy?": buy_recommendation,
+            "Break-even": f"${break_even:.2f}"
+        })
+        K+=2.5
+    
+    df = pd.DataFrame(rows)
+    
+    # Apply row-wise styling based on Buy? column
+    def style_rows(row):
+        buy_value = row['Buy?']
+        if buy_value == "STRONG YES":
+            return ['background-color: #006400; color: white;'] * len(row)  # dark green
+        elif buy_value == "Yes":
+            return ['background-color: #90ee90; color: black;'] * len(row)  # light green
+        elif buy_value == "No":
+            return ['background-color: #ffcccb; color: black;'] * len(row)  # light red
+        elif buy_value == "STRONG NO":
+            return ['background-color: #b22222; color: white;'] * len(row)  # firebrick/dark red
+        else:
+            return [''] * len(row)  # no styling
+    
+    styled_df = df.style.apply(style_rows, axis=1)
+    return styled_df
+
+def calc_advanced_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma_price, upper_1sigma_price):
+    """
+    Calculate advanced options data with Greeks and additional metrics
+    """
+    from math import log, sqrt, exp
+    from scipy.stats import norm
+    
+    rows = []
+    S = current_price
+    K = round(S - 10)
+    T_hours = (1600 - reference_time)
+    r = 0.03961
+    sigma = implied_vol()
+    option_type = "call" if option_switch else "put"
+    
+    # Convert hours to years for Greeks calculation
+    trading_hours_per_year = 252 * 6.5
+    T = T_hours / trading_hours_per_year
+    
+    for i in range(15):        
+        price = black_scholes_price(S, K, T_hours, r, sigma, option_type)
+        
+        # Calculate Greeks if T > 0
+        if T > 0 and sigma > 0:
+            d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+            d2 = d1 - sigma * sqrt(T)
+            
+            # Delta
+            if option_type == "call":
+                delta = norm.cdf(d1)
+            else:
+                delta = norm.cdf(d1) - 1
+            
+            # Gamma (same for calls and puts)
+            gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
+            
+            # Probability ITM
+            if option_type == "call":
+                prob_itm = norm.cdf(d2)
+            else:
+                prob_itm = norm.cdf(-d2)
+        else:
+            delta = gamma = prob_itm = 0
+        
+        # Buy logic using price bounds
+        if option_type == "call":
+            intrinsic_value = max(0, S - K)
+            break_even = K + price
+            if break_even < lower_price:
+                buy_recommendation = "STRONG YES"
+            elif break_even < lower_1sigma_price:
+                buy_recommendation = "Yes"
+            elif break_even < upper_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_price:
+                buy_recommendation = "No"
+            else:
+                buy_recommendation = "STRONG NO"
+        else:  # put
+            intrinsic_value = max(0, K - S)
+            break_even = K - price
+            if break_even < lower_price:
+                buy_recommendation = "STRONG NO"
+            elif break_even < lower_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_1sigma_price:
+                buy_recommendation = "No"
+            elif break_even < upper_price:
+                buy_recommendation = "Yes"
+            else:
+                buy_recommendation = "STRONG YES"
+        
+        rows.append({
+            "Strike": K,
+            "Type": option_type.capitalize(),
+            "Time to Expiration": f"{T_hours/24:.1f} days",
+            "Bid": "Fake",
+            "Ask": "Fake",
+            "Volume": "Fake",
+            "Implied Vol": f"{sigma*100:.1f}%",
+            "Theoretical Price": f"${price:.2f}",
+            "Delta": f"{delta:.3f}",
+            "Gamma": f"{gamma:.4f}",
+            "STD": f"{sigma:.3f}",
+            "Buy?": buy_recommendation,
+            "Probability ITM @ Exp.": f"{prob_itm*100:.1f}%",
+            "ATM price": f"${S:.2f}"
+        })
+        K = K + 2.5
+    
+    df = pd.DataFrame(rows)
+    
+    # Apply row-wise styling based on Buy? column
+    def style_rows(row):
+        buy_value = row['Buy?']
+        if buy_value == "STRONG YES":
+            return ['background-color: #018E01; color: white;'] * len(row)  # dark green
+        elif buy_value == "Yes":
+            return ['background-color: #59CC59; color: white;'] * len(row)  # light green
+        elif buy_value == "No":
+            return ['background-color: #FE6667; color: white;'] * len(row)  # light red
+        elif buy_value == "STRONG NO":
+            return ['background-color: #B10808; color: white;'] * len(row)  # firebrick/dark red
+        else:
+            return [''] * len(row)  # no styling
+    
+    styled_df = df.style.apply(style_rows, axis=1)
+    return styled_df
 
 if __name__ == "__main__":
     logger.info("Starting main execution")
     
-    # Use the module-level variables (already defined above)
-    ticker = "SPY"  # Example ticker
-    logger.info(f"Analyzing {ticker} for date {reference_date} at time {time}")
+    # Use the default ticker
+    ticker = DEFAULT_TICKER
+    logger.info(f"Analyzing {ticker} for date {reference_date} at time {reference_time}")
     
     try:
-        current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time='{time}'", zu.connect_gcp()['engine'])
+        current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time='{reference_time}'", zu.connect_gcp()['engine'])
         logger.info(f"Retrieved current day data: {len(current_day)} rows")
         # Find similar historical patterns
         similar_history, threshold = find_sim_history(current_day, ticker)

@@ -5,26 +5,47 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 import z_util as zu
-from main import find_sim_history, pred_ret, convert_time_to_datetime
+from main import find_sim_history, pred_ret, convert_time_to_datetime, calc_table_data, calc_advanced_table_data
+from config import reference_date, reference_time
 
 # Initialize logger
 logger = zu.get_logger(__name__)
-
-tab1, tab2 = st.tabs(["Home", "Data"])
 st.title("Options Dashboard")
+tab1, tab2, tab3 = st.tabs(["Home", "Data", "Adv. Table"])
 with tab1:
     st.header("Price Graph")
     st.text("Price of reference day until reference time")
+    user_ticker = st.text_input("Enter Ticker Symbol", value="SPY", max_chars=10, help="Enter the stock ticker you want to analyze (e.g., SPY, AAPL, TSLA)")
+    ticker = user_ticker.upper() if user_ticker else "SPY"
 
 # Initialize variables
 current_day = None
 similar_history = None
 logger.info("vars initialized to None")
 # Set parameters (you can make these user inputs later)
-from main import reference_date, time
 formatted_reference_date = pd.to_datetime(reference_date, format='%Y%m%d').strftime('%B %d, %Y')  # Time as integer (1300 = 1:00 PM)
-ticker = "SPY"
 logger.info("params initialized")
+# Create option toggle outside the try block
+col1, col2, col3 = st.columns([4, 1, 1])
+with col2:
+    st.write(f"Ticker: {ticker}")
+with col3:
+    option_type = st.selectbox(
+        "Option Type", 
+        options=["Call", "Put"],
+        index=0,  # Default to Call
+        help="Select Call or Put options"
+    )
+option_switch = option_type == "Call"
+
+# Create empty table placeholders that will be populated later
+summ_table_placeholder = None
+
+with tab3:
+    st.subheader("Advanced Table")
+    empty_adv_table = pd.DataFrame(columns=["Strike", "Type", "Time to Expiration", "Bid", "Ask", "Volume", "Implied Vol", "Theoretical Price", "Delta", "Gamma", "STD", "Buy?", "Probability ITM @ Exp.", "ATM price"])
+    adv_table_placeholder = st.empty()
+    adv_table_placeholder.dataframe(empty_adv_table, use_container_width=True)
 
 try:
     # Test database connection first
@@ -33,17 +54,17 @@ try:
     
     # Get current day data
     logger.info("Fetching current day data...")
-    current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time<={time}", engine)
+    current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time<={reference_time}", engine)
     
     if current_day.empty:
         logger.error("No data found for the reference date and time")
-        logger.info(f"Searched for: date='{reference_date}' AND time='{time}'")
+        logger.info(f"Searched for: date='{reference_date}' AND time='{reference_time}'")
         st.stop()
     
     # Add datetime column to current_day
     current_day['datetime'] = current_day.apply(lambda row: convert_time_to_datetime(str(row['date']), int(row['time'])), axis=1)
     
-    logger.info(f"Found {len(current_day)} records for {reference_date} at {time}")
+    logger.info(f"Found {len(current_day)} records for {reference_date} at {reference_time}")
     
     logger.info("Finding similar historical patterns...")
     similar_history, threshold = find_sim_history(current_day, ticker)
@@ -85,9 +106,10 @@ try:
         diff = upper_price - lower_price
 
         fig.add_hline(y=current_day_sorted['close'].iloc[0], line_color=f'{l_color}', line_width=2, line_dash='dash')
-         # Set x-axis limits for market hours (9:30 AM to 4:00 PM)
+        
+        # Set x-axis limits for market hours (9:30 AM to 4:00 PM)
         start_time = convert_time_to_datetime(reference_date, 930)
-        current_time = convert_time_to_datetime(reference_date, time)
+        current_time = convert_time_to_datetime(reference_date, reference_time)
         end_time = convert_time_to_datetime(reference_date, 1600)
 
         # Alternative: Add special marker points at the end of the chart for CI levels
@@ -192,24 +214,33 @@ try:
 
         with tab1:
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Create and populate the summary table
+            st.markdown("---")
+            st.subheader("Summary Table")
+            populated_summ_table = calc_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
+            st.dataframe(populated_summ_table, use_container_width=True)
+        
+        with tab3:
+            # Populate the advanced table with actual data
+            populated_adv_table = calc_advanced_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
+            adv_table_placeholder.dataframe(populated_adv_table, use_container_width=True)
 
         with tab2:
             st.header("Prediction Results")
             
             st.write(f"**Predicted Return to Close:** {avg_ret:.4f} ({avg_ret*100:.2f}%) = ${current_price * (1 + avg_ret):.4f}")
-            lower_ci_price = current_price * (1 + confidence_interval[0])
-            upper_ci_price = current_price * (1 + confidence_interval[1])
-            st.write(f"**95% Confidence Interval:** ({confidence_interval[0]:.4f}, {confidence_interval[1]:.4f}) = (${lower_ci_price:.4f}, ${upper_ci_price:.4f})")
-            lower_1sigma_price = current_price * (1 + std_ret)
-            upper_1sigma_price = current_price * (1 - std_ret)
-            st.write(f"**1 Sigma:** ({std_ret:.4f}) = (${lower_1sigma_price:.4f}, ${upper_1sigma_price:.4f})")
+            st.write(f"**95% Confidence Interval:** ({confidence_interval[0]:.4f}, {confidence_interval[1]:.4f}) = (${lower_price:.4f}, ${upper_price:.4f})")
+            lower_1sigma = current_price * (1 + std_ret)
+            upper_1sigma = current_price * (1 - std_ret)
+            st.write(f"**1 Sigma:** ({std_ret:.4f}) = (${lower_1sigma:.4f}, ${upper_1sigma:.4f})")
             st.write(f"**Similar Historical Patterns Found:** {len(similar_history)}")
             st.write(f"**Threshold Used:** {threshold:.4f}")
         
             # Show actual vs predicted if available
             if 'ret_to_close' in current_day.columns:
                 actual_ret = current_day['ret_to_close'].iloc[0]
-                st.write(f"*****Actual Return to Close:***** {actual_ret:.4f} ({actual_ret*100:.2f}%)")
+                st.write(f"**Actual Return to Close:** {actual_ret:.4f} ({actual_ret*100:.2f}%)")
                 st.write(f"**Prediction Error:** {abs(actual_ret - avg_ret):.4f} ({abs(actual_ret - avg_ret)*100:.2f}%)")
     else:
         logger.warning("No similar historical patterns found")
@@ -231,11 +262,3 @@ except Exception as e:
     # Show the full error traceback
     import traceback
     st.code(traceback.format_exc())
-
-
-
-
-
-
-
-

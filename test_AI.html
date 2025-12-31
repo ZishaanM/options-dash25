@@ -1,0 +1,319 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, collection, query, limit, orderBy, onSnapshot } from 'firebase/firestore';
+
+// --- CONFIGURATION AND INITIALIZATION (MANDATORY) ---
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-academic-draft-app';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Mock Data for Initial Load (Replace with real data structure)
+const mockProfile = {
+  name: 'Anya Sharma',
+  majorInterest: 'Data Science & Ethics',
+  GPA: 4.0,
+  SAT: 1580,
+  academicScore: 985,
+  commitment: 'Uncommitted',
+  rank: 7,
+  projectedDraftRound: '1st Round - Top 10'
+};
+
+const mockLeaderboard = [
+  { name: 'Kai Chen', academicScore: 998, rank: 1, projectedDraftRound: '1st Round - #1 Pick' },
+  { name: 'Zoe Davis', academicScore: 995, rank: 2, projectedDraftRound: '1st Round - Top 3' },
+  { name: 'Alex Johnson', academicScore: 992, rank: 3, projectedDraftRound: '1st Round - Top 5' },
+  { name: 'Ben Lee', academicScore: 988, rank: 4, projectedDraftRound: '1st Round - Top 10' },
+  { name: 'Chloe Kim', academicScore: 987, rank: 5, projectedDraftRound: '1st Round - Top 10' },
+];
+
+const App = () => {
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  const [profile, setProfile] = useState(mockProfile);
+  const [leaderboard, setLeaderboard] = useState(mockLeaderboard);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+
+  // 1. Initialize Firebase and Authenticate
+  useEffect(() => {
+    if (!firebaseConfig || !Object.keys(firebaseConfig).length) {
+      console.warn("Firebase config missing. Using mock data only.");
+      setIsAuthReady(true);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const app = initializeApp(firebaseConfig);
+      const authInstance = getAuth(app);
+      const firestoreInstance = getFirestore(app);
+      setDb(firestoreInstance);
+      setAuth(authInstance);
+
+      onAuthStateChanged(authInstance, async (user) => {
+        if (user) {
+          setUserId(user.uid);
+        } else {
+          // Sign in anonymously if no token is provided for public access
+          if (!initialAuthToken) {
+            await signInAnonymously(authInstance);
+          }
+        }
+        setIsAuthReady(true);
+      });
+
+      if (initialAuthToken) {
+        signInWithCustomToken(authInstance, initialAuthToken).catch(error => {
+          console.error("Custom token sign-in failed:", error);
+          // Fallback to anonymous sign-in
+          signInAnonymously(authInstance);
+        });
+      }
+    } catch (error) {
+      console.error("Firebase Initialization Error:", error);
+      setIsAuthReady(true); // Allow UI to load even if Firebase fails
+    }
+  }, []);
+
+  // 2. Fetch/Subscribe to Leaderboard Data
+  useEffect(() => {
+    if (!isAuthReady || !db) return;
+
+    // MANDATORY PUBLIC PATH: /artifacts/{appId}/public/data/leaderboard_entries
+    const leaderboardRef = collection(db, `artifacts/${appId}/public/data/leaderboard_entries`);
+    const q = query(leaderboardRef, orderBy('academicScore', 'desc'), limit(10));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const entries = snapshot.docs.map((doc, index) => ({
+        ...doc.data(),
+        id: doc.id,
+        rank: index + 1,
+      }));
+
+      // Find the current user's entry for profile display
+      if (userId) {
+        const userEntry = entries.find(e => e.userId === userId) || entries[0];
+        if (userEntry) {
+          setProfile(prev => ({
+            ...prev,
+            ...userEntry,
+            name: prev.name, // Keep mock name if real name isn't set
+            rank: userEntry.rank,
+            projectedDraftRound: getDraftProjection(userEntry.rank)
+          }));
+        }
+      }
+
+      // Fill mock data if the list is shorter than 10 for display purposes
+      while (entries.length < 10) {
+        entries.push({ name: `Student ${entries.length + 1}`, academicScore: Math.floor(Math.random() * 800 + 100), rank: entries.length + 1, projectedDraftRound: 'Undrafted' });
+      }
+
+      setLeaderboard(entries);
+      setLoading(false);
+    }, (error) => {
+      console.error("Leaderboard subscription failed:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, db, userId]);
+
+  // Utility to determine draft round based on rank
+  const getDraftProjection = useCallback((rank) => {
+    if (rank <= 3) return '1st Round - Top 3 Pick';
+    if (rank <= 10) return '1st Round - Top 10 Pick';
+    if (rank <= 30) return '2nd Round - High Potential';
+    if (rank <= 100) return '3rd Round - Solid Prospect';
+    return 'Undrafted/Developing';
+  }, []);
+
+  // Handler to update the student's profile (Simulated action for commitment)
+  const handleCommit = async (university) => {
+    if (!db || !userId) {
+      setMessage("Please wait for authentication to complete before committing.");
+      return;
+    }
+    
+    const academicScore = Math.floor(Math.random() * 1000); // Simulate score for this example
+    
+    // MANDATORY PRIVATE PATH: /artifacts/{appId}/users/{userId}/academic_profile
+    const profileRef = doc(db, `artifacts/${appId}/users/${userId}/academic_profile/data`);
+
+    const newCommitment = university;
+    const newProfile = {
+      userId: userId,
+      name: profile.name,
+      GPA: profile.GPA,
+      SAT: profile.SAT,
+      majorInterest: profile.majorInterest,
+      academicScore: academicScore, // The critical, proprietary score
+      commitment: newCommitment,
+    };
+
+    try {
+      await setDoc(profileRef, newProfile);
+      setProfile(newProfile);
+      setMessage(`Commitment to ${university} recorded successfully!`);
+    } catch (e) {
+      console.error("Error setting commitment:", e);
+      setMessage("Failed to record commitment. Check console for details.");
+    }
+  };
+
+  const CommittedButton = ({ uni }) => (
+    <button
+      className="px-4 py-2 text-sm font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 transition duration-150"
+      onClick={() => handleCommit(uni)}
+    >
+      Commit to {uni}
+    </button>
+  );
+
+  const StatusPill = ({ text, color }) => (
+    <span className={`px-3 py-1 text-xs font-semibold rounded-full ${color} text-white`}>
+      {text}
+    </span>
+  );
+
+  const isCommitted = profile.commitment !== 'Uncommitted' && profile.commitment;
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
+      <div className="max-w-7xl mx-auto">
+        <header className="mb-8 border-b border-gray-700 pb-4">
+          <h1 className="text-4xl font-extrabold text-indigo-400">
+            Academic Draft Board <span className="text-xl font-light">| Scholar Recruiting Network</span>
+          </h1>
+          <p className="text-sm text-gray-400 mt-1">User ID: <span className="font-mono text-xs text-yellow-300 break-all">{userId || 'Loading...'}</span> | App ID: <span className="font-mono text-xs text-yellow-300 break-all">{appId}</span></p>
+        </header>
+
+        {message && (
+          <div className="bg-green-700 p-3 rounded-lg mb-6 text-sm">
+            {message}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* --- STUDENT PROFILE CARD (2/3 Width on Mobile, 1/3 on Desktop) --- */}
+          <div className="lg:col-span-1 bg-gray-800 p-6 rounded-xl shadow-2xl border border-indigo-600/50 h-fit">
+            <h3 className="text-2xl font-bold mb-4 border-b border-gray-700 pb-2">Your Player Profile</h3>
+
+            <div className="flex items-center space-x-4 mb-4">
+              <div className="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center text-3xl font-bold">
+                {profile.name[0]}
+              </div>
+              <div>
+                <p className="text-xl font-semibold">{profile.name}</p>
+                <p className="text-sm text-gray-400">{profile.majorInterest}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-6 text-sm">
+              <div className="flex justify-between items-center border-t border-gray-700 pt-3">
+                <span className="text-gray-400">Global Academic Rank:</span>
+                <StatusPill text={`#${profile.rank}`} color="bg-pink-600" />
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400">Projected Draft Round:</span>
+                <StatusPill text={profile.projectedDraftRound} color="bg-yellow-600" />
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400">Commitment Status:</span>
+                <StatusPill text={isCommitted ? profile.commitment : 'Open'} color={isCommitted ? "bg-green-600" : "bg-red-600"} />
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400">Recruiter Score (A-Score):</span>
+                <span className="text-lg font-bold text-indigo-400">{profile.academicScore}</span>
+              </div>
+            </div>
+
+            {/* Simulated Commitment Section */}
+            <h4 className="text-lg font-semibold mt-6 mb-3">Recruiting Offers</h4>
+            {isCommitted ? (
+                <p className="text-green-400 font-medium">COMMITTED to {profile.commitment}!</p>
+            ) : (
+                <div className="flex flex-col space-y-2">
+                    <CommittedButton uni="Harvard University" />
+                    <CommittedButton uni="Stanford University" />
+                </div>
+            )}
+          </div>
+
+          {/* --- GLOBAL LEADERBOARD (2/3 Width on Desktop) --- */}
+          <div className="lg:col-span-2">
+            <h3 className="text-2xl font-bold mb-4">Global Academic Leaderboard</h3>
+            
+            <div className="bg-gray-800 p-6 rounded-xl shadow-2xl">
+              {loading ? (
+                <p className="text-gray-500">Loading real-time global scores...</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-700">
+                    <thead>
+                      <tr className="text-left text-sm font-medium text-gray-400 uppercase tracking-wider">
+                        <th className="px-3 py-3 w-16">Rank</th>
+                        <th className="px-3 py-3">Student / Major</th>
+                        <th className="px-3 py-3">A-Score</th>
+                        <th className="px-3 py-3 hidden sm:table-cell">Draft Projection</th>
+                        <th className="px-3 py-3 hidden md:table-cell">Commitment</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700">
+                      {leaderboard.slice(0, 10).map((student) => (
+                        <tr 
+                          key={student.id || student.name} 
+                          className={student.userId === userId ? "bg-indigo-900/40 font-bold" : "hover:bg-gray-700/50 transition duration-150"}
+                        >
+                          <td className="px-3 py-3 whitespace-nowrap text-lg text-indigo-400">{`#${student.rank}`}</td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <div className="text-white">{student.name}</div>
+                            <div className="text-xs text-gray-500">{student.majorInterest || 'Various'}</div>
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-yellow-400">{student.academicScore}</td>
+                          <td className="px-3 py-3 whitespace-nowrap hidden sm:table-cell">
+                            <StatusPill text={student.projectedDraftRound} color={student.rank <= 10 ? "bg-red-700" : "bg-gray-500"} />
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap hidden md:table-cell">
+                             <span className={`text-xs font-medium ${student.commitment && student.commitment !== 'Uncommitted' ? 'text-green-400' : 'text-red-400'}`}>
+                                {student.commitment && student.commitment !== 'Uncommitted' ? student.commitment : 'Open'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* --- RECRUITER INSIGHTS BLOCK --- */}
+            <div className="mt-8 bg-gray-800 p-6 rounded-xl shadow-2xl">
+                <h4 className="text-xl font-bold mb-4 text-green-400">Recruiter Intelligence</h4>
+                <p className="text-sm text-gray-400 mb-4">
+                    Colleges actively use this data to identify talent. If your A-Score is above 950, you have a 95% chance of receiving a 1st Round Offer from a Top 20 University.
+                </p>
+                <div className="text-sm">
+                    <p className="flex justify-between items-center py-1 border-t border-gray-700">
+                        <span className="text-gray-400">Current Offers in your major:</span>
+                        <span className="text-blue-400 font-semibold">4</span>
+                    </p>
+                    <p className="flex justify-between items-center py-1 border-t border-gray-700">
+                        <span className="text-gray-400">Recruiters viewing your profile today:</span>
+                        <span className="text-blue-400 font-semibold">12</span>
+                    </p>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
