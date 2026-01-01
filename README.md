@@ -10,7 +10,9 @@ I asked my mentor about a project that would let me explore the intersection of 
 
 Traditional options pricing models don't account for intraday market dynamics. Meanwhile, traders often rely on intuition when deciding whether to buy or sell options during the trading day. Options tools calculate theoretical prices but don't contextualize them against likely price movements
 
-**My solution:** A dashboard that finds historically similar trading days, predicts where the stock will close, and uses those predictions to recommend whether specific options are worth buying—all updated in real-time.
+## My solution
+
+ A dashboard that finds historically similar trading days, predicts where the stock will close, and uses those predictions to recommend whether specific options are worth buying—all updated in real-time.
 
 ## My Approach
 
