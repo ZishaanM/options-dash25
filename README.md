@@ -8,12 +8,7 @@ I asked my mentor about a project that would let me explore the intersection of 
 
 ## The Problem
 
-Traditional options pricing models like Black-Scholes assume constant volatility and don't account for intraday market dynamics. Meanwhile, traders often rely on intuition when deciding whether to buy or sell options during the trading day.
-
-**The gap I identified:**
-- Options tools calculate theoretical prices but don't contextualize them against likely price movements
-- Pattern-based analysis exists for daily/weekly timeframes but rarely for intraday decisions
-- There's no easy way to combine historical pattern similarity with options pricing for real-time recommendations
+Traditional options pricing models don't account for intraday market dynamics. Meanwhile, traders often rely on intuition when deciding whether to buy or sell options during the trading day. Options tools calculate theoretical prices but don't contextualize them against likely price movements
 
 **My solution:** A dashboard that finds historically similar trading days, predicts where the stock will close, and uses those predictions to recommend whether specific options are worth buying—all updated in real-time.
 
