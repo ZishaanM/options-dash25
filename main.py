@@ -1,14 +1,12 @@
 import pandas as pd
 import numpy as np
-import sqlalchemy as sa
-from sqlalchemy import text
 import scipy.stats as st
 from datetime import datetime, time
 
 import z_util as zu
 from config import reference_date, reference_time
 
-table = 'returns'
+TABLE_NAME = 'returns'
 logger = zu.get_logger(__name__)
 
 # Default ticker - can be overridden when calling functions
@@ -52,39 +50,40 @@ def find_sim_history(reference_day: pd.DataFrame,
     
     logger.info(f"Current time: {curr_time}, Returns: {current_day_returns}")
     
-    engine = zu.connect_gcp()['engine']
+    # Load data from parquet (cached)
+    returns_df = zu.load_parquet(TABLE_NAME)
+    
+    # Extract reference values
+    ret_from_open = current_day_returns[0]
+    ret_from_p_close = current_day_returns[1]
+    ret_from_high = current_day_returns[2]
+    ret_from_low = current_day_returns[3]
+    
     threshold = 0.001
     logger.info(f"Initial threshold: {threshold}")
-    params = {
-        "curr_time": curr_time,
-        "ret_from_open": current_day_returns[0],
-        "ret_from_p_close": current_day_returns[1],
-        "ret_from_high": current_day_returns[2],
-        "ret_from_low": current_day_returns[3]
-    }
+    
     for i in range(100):
-        query = text(f"""
-            SELECT date, time, close, ret_from_open, ret_from_p_close, ret_from_high, ret_from_low, ret_to_close,
-                -- Calculate similarity score for each component (excluding ret_to_close)
-                ABS(ret_from_open - :ret_from_open) as diff_open,
-                ABS(ret_from_p_close - :ret_from_p_close) as diff_p_close,
-                ABS(ret_from_high - :ret_from_high) as diff_high,
-                ABS(ret_from_low - :ret_from_low) as diff_low
-            FROM {table}
-            WHERE time = :curr_time
-            AND ABS(ret_from_open - :ret_from_open) < {threshold}
-            AND ABS(ret_from_p_close - :ret_from_p_close) < {threshold}
-            AND ABS(ret_from_high - :ret_from_high) < {threshold}
-            AND ABS(ret_from_low - :ret_from_low) < {threshold}
-            ORDER BY (
-                ABS(ret_from_open - :ret_from_open) + 
-                ABS(ret_from_p_close - :ret_from_p_close) + 
-                ABS(ret_from_high - :ret_from_high) + 
-                ABS(ret_from_low - :ret_from_low)
-            ) ASC
-            LIMIT 100  -- Get top 100 most similar days
-        """)
-        df = pd.read_sql(query, engine, params=params)
+        # Filter by time
+        df = returns_df[returns_df['time'] == curr_time].copy()
+        
+        # Apply threshold filters
+        df = df[
+            (abs(df['ret_from_open'] - ret_from_open) < threshold) &
+            (abs(df['ret_from_p_close'] - ret_from_p_close) < threshold) &
+            (abs(df['ret_from_high'] - ret_from_high) < threshold) &
+            (abs(df['ret_from_low'] - ret_from_low) < threshold)
+        ]
+        
+        # Calculate similarity scores
+        df['diff_open'] = abs(df['ret_from_open'] - ret_from_open)
+        df['diff_p_close'] = abs(df['ret_from_p_close'] - ret_from_p_close)
+        df['diff_high'] = abs(df['ret_from_high'] - ret_from_high)
+        df['diff_low'] = abs(df['ret_from_low'] - ret_from_low)
+        df['total_diff'] = df['diff_open'] + df['diff_p_close'] + df['diff_high'] + df['diff_low']
+        
+        # Sort by total difference and limit to 100
+        df = df.sort_values('total_diff').head(100)
+        
         logger.info(f"Iteration {i+1}: Found {len(df)} similar patterns with threshold {threshold}")
         
         if len(df) < 30:
@@ -114,8 +113,6 @@ def pred_ret(similar_history: pd.DataFrame) -> float:
     
     logger.info(f"Average return to close: {avg_ret_to_close:.4f}, Std dev: {std_ret_to_close:.4f}")
     
-    #z_score = (current_day_returns[4] - avg_ret_to_close) / std_ret_to_close
-    #p_value = st.norm.cdf(z_score)
     CI = st.norm.interval(0.95, loc=avg_ret_to_close, scale=std_ret_to_close)
     logger.info(f"95% Confidence interval: [{CI[0]:.4f}, {CI[1]:.4f}]")
     
@@ -178,13 +175,20 @@ def calc_table_data(current_price, option_switch, lower_price, upper_price, lowe
     rows = []
     S = current_price
     K = round(S - 10)
-    T_hours = (1600 - reference_time)
+    
+    # Calculate time to expiry in minutes (HHMM format conversion)
+    end_time = 1600
+    end_hrs, end_mins = end_time // 100, end_time % 100
+    ref_hrs, ref_mins = reference_time // 100, reference_time % 100
+    TOE_minutes = (end_hrs - ref_hrs) * 60 + (end_mins - ref_mins)
+    TOE_hours = TOE_minutes / 60  # Convert to hours for Black-Scholes
+    
     r = 0.03961
     sigma = implied_vol()
     option_type = "call" if option_switch else "put"
     
     for i in range(15):        
-        price = black_scholes_price(S, K, T_hours, r, sigma, option_type)
+        price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         buy_recommendation = ""
         if option_type == "call":
             intrinsic_value = max(0, S - K - price)
@@ -215,7 +219,7 @@ def calc_table_data(current_price, option_switch, lower_price, upper_price, lowe
         rows.append({
             "Strike": K,
             "Type": option_type.capitalize(),
-            "Time to Expiration": f"{T_hours*60:.1f} minutes",
+            "Time to Expiration": f"{TOE_minutes:.0f} minutes",
             "Theoretical Price": f"${price:.2f}",
             "Buy?": buy_recommendation,
             "Break-even": f"${break_even:.2f}"
@@ -251,17 +255,24 @@ def calc_advanced_table_data(current_price, option_switch, lower_price, upper_pr
     rows = []
     S = current_price
     K = round(S - 10)
-    T_hours = (1600 - reference_time)
+    
+    # Calculate time to expiry in minutes (HHMM format conversion)
+    end_time = 1600
+    end_hrs, end_mins = end_time // 100, end_time % 100
+    ref_hrs, ref_mins = reference_time // 100, reference_time % 100
+    TOE_minutes = (end_hrs - ref_hrs) * 60 + (end_mins - ref_mins)
+    TOE_hours = TOE_minutes / 60  # Convert to hours for Black-Scholes
+    
     r = 0.03961
     sigma = implied_vol()
     option_type = "call" if option_switch else "put"
     
     # Convert hours to years for Greeks calculation
     trading_hours_per_year = 252 * 6.5
-    T = T_hours / trading_hours_per_year
+    T = TOE_hours / trading_hours_per_year
     
     for i in range(15):        
-        price = black_scholes_price(S, K, T_hours, r, sigma, option_type)
+        price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         
         # Calculate Greeks if T > 0
         if T > 0 and sigma > 0:
@@ -316,7 +327,7 @@ def calc_advanced_table_data(current_price, option_switch, lower_price, upper_pr
         rows.append({
             "Strike": K,
             "Type": option_type.capitalize(),
-            "Time to Expiration": f"{T_hours/24:.1f} days",
+            "Time to Expiration": f"{TOE_minutes:.0f} minutes",
             "Bid": "Fake",
             "Ask": "Fake",
             "Volume": "Fake",
@@ -358,7 +369,11 @@ if __name__ == "__main__":
     logger.info(f"Analyzing {ticker} for date {reference_date} at time {reference_time}")
     
     try:
-        current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time='{reference_time}'", zu.connect_gcp()['engine'])
+        # Load returns data from parquet and filter (convert types to match parquet data)
+        returns_df = zu.load_parquet(TABLE_NAME)
+        ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
+        ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
+        current_day = returns_df[(returns_df['date'] == ref_date) & (returns_df['time'] == ref_time)].copy()
         logger.info(f"Retrieved current day data: {len(current_day)} rows")
         # Find similar historical patterns
         similar_history, threshold = find_sim_history(current_day, ticker)
@@ -417,9 +432,9 @@ if __name__ == "__main__":
         
     except Exception as e:
         logger.error(f"Error running find_sim_history: {e}")
-        logger.error("Make sure your environment variables are set and database is accessible")
+        logger.error("Make sure the parquet files exist in the script directory")
         print(f"Error running find_sim_history: {e}")
-        print("Make sure your environment variables are set and database is accessible")
+        print("Make sure the parquet files exist in the script directory")
 
 
     #for loop to run through 100 dates, and find how many times the actual return is within the CI

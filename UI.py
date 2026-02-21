@@ -18,11 +18,9 @@ with tab1:
     user_ticker = st.text_input("Enter Ticker Symbol", value="SPY", max_chars=10, help="Enter the stock ticker you want to analyze (e.g., SPY, AAPL, TSLA)")
     ticker = user_ticker.upper() if user_ticker else "SPY"
 
-# Initialize variables
 current_day = None
 similar_history = None
 logger.info("vars initialized to None")
-# Set parameters (you can make these user inputs later)
 formatted_reference_date = pd.to_datetime(reference_date, format='%Y%m%d').strftime('%B %d, %Y')  # Time as integer (1300 = 1:00 PM)
 logger.info("params initialized")
 # Create option toggle outside the try block
@@ -33,7 +31,7 @@ with col3:
     option_type = st.selectbox(
         "Option Type", 
         options=["Call", "Put"],
-        index=0,  # Default to Call
+        index=1,
         help="Select Call or Put options"
     )
 option_switch = option_type == "Call"
@@ -48,13 +46,15 @@ with tab3:
     adv_table_placeholder.dataframe(empty_adv_table, use_container_width=True)
 
 try:
-    # Test database connection first
-    logger.info("Connecting to database...")
-    engine = zu.connect_gcp()['engine']
+    # Load data from parquet
+    logger.info("Loading data from parquet...")
+    returns_df = zu.load_parquet('returns')
     
-    # Get current day data
+    # Get current day data (convert types to match parquet data)
     logger.info("Fetching current day data...")
-    current_day = pd.read_sql(f"SELECT * FROM returns WHERE date='{reference_date}' AND time<={reference_time}", engine)
+    ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
+    ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
+    current_day = returns_df[(returns_df['date'] == ref_date) & (returns_df['time'] <= ref_time)].copy()
     
     if current_day.empty:
         logger.error("No data found for the reference date and time")
@@ -247,17 +247,20 @@ try:
         
 except Exception as e:
     logger.error(f"Error loading data: {e}")
-    logger.error("Make sure your environment variables are set and database is accessible")
+    logger.error("Make sure the parquet files exist in the script directory")
     
     # Show debug information
-    logger.info("Debug Information")
+    st.error(f"Error: {e}")
+    st.info("Debug Information")
     import os
-    env_vars = ['gcp_server', 'gcp_username', 'gcp_password']
-    for var in env_vars:
-        if os.getenv(var):
-            st.write(f"✅ {var}: Set")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parquet_files = ['returns.parquet', 'av_minute.parquet']
+    for pf in parquet_files:
+        filepath = os.path.join(script_dir, pf)
+        if os.path.exists(filepath):
+            st.write(f"✅ {pf}: Found")
         else:
-            st.write(f"❌ {var}: Not set")
+            st.write(f"❌ {pf}: Not found")
     
     # Show the full error traceback
     import traceback

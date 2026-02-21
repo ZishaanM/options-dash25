@@ -1,10 +1,61 @@
 import os
 import logging
 import logging.handlers
+from functools import lru_cache
 
 import pandas as pd
 import numpy as np
 import sqlalchemy as sa
+
+# =============================================================================
+# PARQUET DATA LOADING (Local storage - replaces GCP)
+# =============================================================================
+
+# Cache for loaded parquet dataframes
+_parquet_cache = {}
+
+def load_parquet(table_name: str, force_reload: bool = False) -> pd.DataFrame:
+    """
+    Load a parquet file by table name with caching.
+    
+    Args:
+        table_name: Name of the table (e.g., 'returns', 'av_minute')
+        force_reload: If True, reload from disk even if cached
+    
+    Returns:
+        pd.DataFrame: The loaded data
+    """
+    global _parquet_cache
+    
+    if table_name in _parquet_cache and not force_reload:
+        return _parquet_cache[table_name]
+    
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    filepath = os.path.join(script_dir, f"{table_name}.parquet")
+    
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Parquet file not found: {filepath}")
+    
+    df = pd.read_parquet(filepath)
+    _parquet_cache[table_name] = df
+    
+    return df
+
+def clear_parquet_cache(table_name: str = None):
+    """
+    Clear the parquet cache.
+    
+    Args:
+        table_name: If provided, only clear that table. Otherwise clear all.
+    """
+    global _parquet_cache
+    if table_name:
+        _parquet_cache.pop(table_name, None)
+    else:
+        _parquet_cache.clear()
+
+# =============================================================================
 
 
 def init_logging(logger, log_file='main.log', central_error_log='cron.log'):
