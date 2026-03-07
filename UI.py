@@ -3,24 +3,81 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+from datetime import time as dt_time
 
 import z_util as zu
-from main import find_sim_history, pred_ret, convert_time_to_datetime, calc_table_data, calc_advanced_table_data
+from main import find_sim_history, OLD_pred_ret, pred_ret, convert_time_to_datetime, calc_table_data, calc_advanced_table_data
 from config import reference_date, reference_time
+from main import get_today_data
+from main import load_data
 
 # Initialize logger
 logger = zu.get_logger(__name__)
 st.title("Options Dashboard")
 tab1, tab2, tab3 = st.tabs(["Home", "Data", "Adv. Table"])
 with tab1:
+   
     st.header("Price Graph")
     st.text("Price of reference day until reference time")
-    user_ticker = st.text_input("Enter Ticker Symbol", value="SPY", max_chars=10, help="Enter the stock ticker you want to analyze (e.g., SPY, AAPL, TSLA)")
-    ticker = user_ticker.upper() if user_ticker else "SPY"
+    realtime_toggle = st.toggle("Realtime", value=True)
+    month = datetime.now().month
+    day = datetime.now().day
+    dayofweek = datetime.now().weekday()
+    year = datetime.now().year
+    time = datetime.now().time().hour * 100 + datetime.now().time().minute
+    if realtime_toggle:
+        user_ticker = st.text_input("Ticker", value="SPY", max_chars=10)
+        ticker = user_ticker.upper() if user_ticker else "SPY"
+        get_today_data(ticker)
+    else:
+        date_col1, date_col2, date_col3, date_col4, date_col5 = st.columns(5)
+        with date_col1:
+            user_ticker = st.text_input("Ticker", value="SPY", max_chars=10)
+        with date_col2:
+            month = st.selectbox("Month", options=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
+            month_dict = {
+                "January": 1,
+                "February": 2,
+                "March": 3,
+                "April": 4,
+                "May": 5,
+                "June": 6,
+                "July": 7,
+                "August": 8,
+                "September": 9,
+                "October": 10,
+                "November": 11,
+                "December": 12
+            }
+            month = month_dict[month]
+        with date_col3:
+            day = int(st.number_input("Day", value=2, min_value=1, max_value=31, step=1))
+        with date_col4:
+            year = st.number_input("Year", value=2015, min_value=1999, max_value=2020, step=1)
+        with date_col5:
+            #it needs to skip 60-99
+            selected_time = st.time_input("Reference Time", value=dt_time(13, 00), step=60)
+            time = selected_time.hour * 100 + selected_time.minute
+        reference_date = f"{year}{month:02d}{day:02d}"
+        ticker = user_ticker.upper() if user_ticker else "SPY"
+        dayofweek = datetime(year, month, day).weekday()
+        returns_df_check = load_data()
+        if returns_df_check[(returns_df_check['date'] == int(reference_date))].empty or time < 930 or time > 1600 or dayofweek > 4:
+            st.write("Market is closed or data not available, please select a past date/time to simulate")
+    
+    
+
+    
 
 current_day = None
 similar_history = None
 logger.info("vars initialized to None")
+
+# Set reference_date for realtime mode to today's date
+if realtime_toggle:
+    today = datetime.now()
+    reference_date = f"{today.year}{today.month:02d}{today.day:02d}"
+    
 formatted_reference_date = pd.to_datetime(reference_date, format='%Y%m%d').strftime('%B %d, %Y')  # Time as integer (1300 = 1:00 PM)
 logger.info("params initialized")
 # Create option toggle outside the try block
@@ -54,15 +111,23 @@ try:
     logger.info("Fetching current day data...")
     ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
     ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
-    current_day = returns_df[(returns_df['date'] == ref_date) & (returns_df['time'] <= ref_time)].copy()
+    if realtime_toggle:
+        current_day = get_today_data(ticker)
+    else:
+        current_day = returns_df[(returns_df['date'] == ref_date) & (returns_df['time'] <= ref_time)].copy()
     
     if current_day.empty:
         logger.error("No data found for the reference date and time")
         logger.info(f"Searched for: date='{reference_date}' AND time='{reference_time}'")
         st.stop()
     
-    # Add datetime column to current_day
-    current_day['datetime'] = current_day.apply(lambda row: convert_time_to_datetime(str(row['date']), int(row['time'])), axis=1)
+    # Add datetime column to current_day if it doesn't exist
+    if 'datetime' not in current_day.columns:
+        current_day['datetime'] = current_day.apply(lambda row: convert_time_to_datetime(str(row['date']), int(row['time'])), axis=1)
+    else:
+        # For realtime data, ensure datetime is timezone-naive for consistency
+        if current_day['datetime'].dt.tz is not None:
+            current_day['datetime'] = current_day['datetime'].dt.tz_localize(None)
     
     logger.info(f"Found {len(current_day)} records for {reference_date} at {reference_time}")
     
@@ -94,7 +159,7 @@ try:
             marker=dict(size=4)
         ))
         
-        avg_ret, confidence_interval, std_ret = pred_ret(similar_history)
+        avg_ret, confidence_interval, std_ret = OLD_pred_ret(similar_history)
         
         # Get current price to convert returns to price levels
         current_price = current_day_sorted['close'].iloc[-1]  # Latest price
@@ -218,25 +283,25 @@ try:
             # Create and populate the summary table
             st.markdown("---")
             st.subheader("Summary Table")
-            populated_summ_table = calc_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
+            populated_summ_table = calc_table_data(similar_history, current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
             st.dataframe(populated_summ_table, use_container_width=True)
         
         with tab3:
             # Populate the advanced table with actual data
-            populated_adv_table = calc_advanced_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
+            populated_adv_table = calc_advanced_table_data(similar_history, current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
             adv_table_placeholder.dataframe(populated_adv_table, use_container_width=True)
 
         with tab2:
             st.header("Prediction Results")
             
-            st.write(f"**Predicted Return to Close:** {avg_ret:.4f} ({avg_ret*100:.2f}%) = ${current_price * (1 + avg_ret):.4f}")
-            st.write(f"**95% Confidence Interval:** ({confidence_interval[0]:.4f}, {confidence_interval[1]:.4f}) = (${lower_price:.4f}, ${upper_price:.4f})")
-            lower_1sigma = current_price * (1 + std_ret)
-            upper_1sigma = current_price * (1 - std_ret)
-            st.write(f"**1 Sigma:** ({std_ret:.4f}) = (${lower_1sigma:.4f}, ${upper_1sigma:.4f})")
             st.write(f"**Similar Historical Patterns Found:** {len(similar_history)}")
             st.write(f"**Threshold Used:** {threshold:.4f}")
-        
+            st.write(f"**Predicted Return to Close:** {avg_ret:.4f} ({avg_ret*100:.2f}%) = ${current_price * (1 + avg_ret):.4f}")
+            st.write(f"**95% Confidence Interval:** ({confidence_interval[0]:.4f}, {confidence_interval[1]:.4f}) = (${lower_price:.4f}, ${upper_price:.4f})")
+            lower_1sigma = current_price * (1 + avg_ret - std_ret)
+            upper_1sigma = current_price * (1 + avg_ret + std_ret)
+            st.write(f"**1 Sigma:** ({std_ret:.4f}) = (${lower_1sigma:.4f}, ${upper_1sigma:.4f})")
+    
             # Show actual vs predicted if available
             if 'ret_to_close' in current_day.columns:
                 actual_ret = current_day['ret_to_close'].iloc[0]

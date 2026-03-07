@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
-import scipy.stats as st
-from datetime import datetime, time
+import scipy.stats as stats
+import streamlit as st
+import yfinance as yf
+from datetime import datetime, date, time
 
 import z_util as zu
 from config import reference_date, reference_time
@@ -11,6 +13,53 @@ logger = zu.get_logger(__name__)
 
 # Default ticker - can be overridden when calling functions
 DEFAULT_TICKER = "SPY"
+
+@st.cache_data
+def load_data():
+    return zu.load_parquet('returns')
+returns_df = load_data()
+
+@st.cache_data(ttl=60)
+def get_today_data(ticker: str) -> pd.DataFrame:
+    """
+    Get today's data for a given ticker
+    """
+    today = date.today()
+    market_open = datetime(today.year, today.month, today.day, 9, 30)
+    today_df = yf.download(ticker, start=market_open, end=datetime.now(), interval='1m')
+    
+    if today_df.empty:
+        return today_df
+    
+    today_df.columns = today_df.columns.get_level_values(0)
+    today_df = today_df.reset_index()
+    today_df.columns = today_df.columns.str.lower()
+    
+    # Convert to Eastern time for date/time columns
+    today_df['datetime'] = today_df['datetime'].dt.tz_convert('America/New_York')
+    today_df['date'] = today_df['datetime'].dt.strftime('%Y%m%d').astype(int)
+    today_df['time'] = today_df['datetime'].dt.hour * 100 + today_df['datetime'].dt.minute
+    
+    # Calculate return from open
+    open_price = today_df['open'].iloc[0]
+    today_df['ret_from_open'] = (today_df['close'] - open_price) / open_price
+    
+    # Get previous close safely
+    prev_data = yf.download(ticker, period='5d', interval='1d')
+    if isinstance(prev_data.columns, pd.MultiIndex):
+        prev_data.columns = prev_data.columns.get_level_values(0)
+    
+    if len(prev_data) >= 2:
+        prev_close = float(prev_data['Close'].iloc[-2])
+    else:
+        prev_close = float(open_price)
+    
+    today_df['ret_from_p_close'] = (today_df['close'] - prev_close) / prev_close
+    today_df['ret_from_high'] = (today_df['close'] - today_df['high'].cummax()) / today_df['high'].cummax()
+    today_df['ret_from_low'] = (today_df['close'] - today_df['low'].cummin()) / today_df['low'].cummin()
+    today_df['ret_to_close'] = float('nan')
+    
+    return today_df
 
 def convert_time_to_datetime(date_str: str, time_int: int) -> pd.Timestamp:
     """
@@ -45,8 +94,8 @@ def find_sim_history(reference_day: pd.DataFrame,
     logger.info(f"Starting similarity search for ticker: {ticker}")
     
     table_row = ["ret_from_open", "ret_from_p_close", "ret_from_high", "ret_from_low", "ret_to_close"]
-    current_day_returns = [float(reference_day[row].iloc[0]) if row in reference_day.columns and not pd.isna(reference_day[row].iloc[0]) else None for row in table_row]
-    curr_time = int(reference_day['time'].iloc[0])  # Convert to native Python int
+    current_day_returns = [float(reference_day[row].iloc[-1]) if row in reference_day.columns and not pd.isna(reference_day[row].iloc[-1]) else None for row in table_row]
+    curr_time = int(reference_day['time'].iloc[-1])  # Convert to native Python int, use latest time
     
     logger.info(f"Current time: {curr_time}, Returns: {current_day_returns}")
     
@@ -101,7 +150,52 @@ def find_sim_history(reference_day: pd.DataFrame,
     
     return df, threshold
 
-def pred_ret(similar_history: pd.DataFrame) -> float:
+def pred_ret(similar_history: pd.DataFrame, current_price: float, strike_price: float, premium: float, is_call: bool) -> tuple:
+    """
+    Calculate probability of profit and expected profit using empirical distribution.
+    
+    Args:
+        similar_history: DataFrame with similar historical patterns
+        current_price: Current stock price
+        strike_price: Option strike price
+        premium: Option premium paid
+        is_call: True for call options, False for puts
+    
+    Returns:
+        tuple: (prob_profit, expected_profit_if_profitable, break_even_price)
+    """
+    logger.info(f"Calculating empirical predictions from {len(similar_history)} similar patterns")
+
+    close_returns = similar_history["ret_to_close"].tolist()
+    
+    if is_call:
+        # Call: profitable if final_price > strike + premium
+        break_even_price = strike_price + premium
+        break_even_return = (break_even_price - current_price) / current_price
+        profit_list = [current_price * (1 + r) - break_even_price 
+                       for r in close_returns if r > break_even_return]
+    else:
+        # Put: profitable if final_price < strike - premium
+        break_even_price = strike_price - premium
+        break_even_return = (break_even_price - current_price) / current_price
+        profit_list = [break_even_price - current_price * (1 + r) 
+                       for r in close_returns if r < break_even_return]
+    
+    num_profitable = len(profit_list)
+    prob_profit = num_profitable / len(similar_history) if len(similar_history) > 0 else 0
+    
+    # Expected profit when profitable (in dollars)
+    expected_profit = np.mean(profit_list) if profit_list else 0.0
+    expected_value = (prob_profit * expected_profit) - ((1 - prob_profit) * premium)
+
+    logger.info(f"Break-even price: ${break_even_price:.2f} (return needed: {break_even_return:.4f})")
+    logger.info(f"Probability of profit: {prob_profit:.2%} ({num_profitable}/{len(similar_history)})")
+    logger.info(f"Expected profit (if profitable): ${expected_profit:.2f}")
+    
+    return prob_profit, expected_profit, break_even_price, expected_value
+
+#This is the old prediction function
+def OLD_pred_ret(similar_history: pd.DataFrame) -> float:
     """
     Predict the return of the current day based on the similar historical patterns
     """
@@ -113,10 +207,12 @@ def pred_ret(similar_history: pd.DataFrame) -> float:
     
     logger.info(f"Average return to close: {avg_ret_to_close:.4f}, Std dev: {std_ret_to_close:.4f}")
     
-    CI = st.norm.interval(0.95, loc=avg_ret_to_close, scale=std_ret_to_close)
+    CI = stats.norm.interval(0.95, loc=avg_ret_to_close, scale=std_ret_to_close)
     logger.info(f"95% Confidence interval: [{CI[0]:.4f}, {CI[1]:.4f}]")
     
     return avg_ret_to_close, CI, std_ret_to_close
+
+
 
 def black_scholes_price(S, K, T_hours, r, sigma, option_type='call'):
     """
@@ -168,7 +264,7 @@ def implied_vol():
     """
     return 0.32161
 
-def calc_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma_price, upper_1sigma_price):
+def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_switch: bool, lower_price: float, upper_price: float, lower_1sigma_price: float, upper_1sigma_price: float):
     """
     Calculate options data and return a complete table
     """
@@ -187,46 +283,29 @@ def calc_table_data(current_price, option_switch, lower_price, upper_price, lowe
     sigma = implied_vol()
     option_type = "call" if option_switch else "put"
     
-    for i in range(15):        
+    for i in range(8):        
         price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         buy_recommendation = ""
-        if option_type == "call":
-            intrinsic_value = max(0, S - K - price)
-            break_even = K + price
-            if break_even < lower_price:
-                buy_recommendation = "STRONG YES"
-            elif break_even < lower_1sigma_price:
-                buy_recommendation = "Yes"
-            elif break_even < upper_1sigma_price:
-                buy_recommendation = "No"
-            elif break_even < upper_price:
-                buy_recommendation = "No"
-            else:
-                buy_recommendation = "STRONG NO"
-        else:  # put
-            intrinsic_value = max(0, K - S - price)
-            break_even = K - price
-            if break_even < lower_price:
-                buy_recommendation = "STRONG NO"
-            elif break_even < lower_1sigma_price:
-                buy_recommendation = "No"
-            elif break_even < upper_1sigma_price:
-                buy_recommendation = "No"
-            elif break_even < upper_price:
-                buy_recommendation = "Yes"
-            else:
-                buy_recommendation = "STRONG YES"
+        prob_profit, expected_profit, break_even_price, expected_value = pred_ret(similar_history, S, K, price, option_switch)
+        if expected_value > 0:
+            buy_recommendation = "Yes"
+        else:
+            buy_recommendation = "No"
         rows.append({
             "Strike": K,
             "Type": option_type.capitalize(),
             "Time to Expiration": f"{TOE_minutes:.0f} minutes",
             "Theoretical Price": f"${price:.2f}",
-            "Buy?": buy_recommendation,
-            "Break-even": f"${break_even:.2f}"
+            "Break-even": f"${break_even_price:.2f}",
+            "Prob. Profit": f"{prob_profit:.1%}",
+            "Exp. Profit": f"${expected_profit:.2f}",
+            "Exp. Value": f"${expected_value:.2f}",
+            "Buy?": buy_recommendation
         })
         K+=2.5
     
     df = pd.DataFrame(rows)
+    
     
     # Apply row-wise styling based on Buy? column
     def style_rows(row):
@@ -245,7 +324,7 @@ def calc_table_data(current_price, option_switch, lower_price, upper_price, lowe
     styled_df = df.style.apply(style_rows, axis=1)
     return styled_df
 
-def calc_advanced_table_data(current_price, option_switch, lower_price, upper_price, lower_1sigma_price, upper_1sigma_price):
+def calc_advanced_table_data(similar_history: pd.DataFrame, current_price: float, option_switch: bool, lower_price: float, upper_price: float, lower_1sigma_price: float, upper_1sigma_price: float):
     """
     Calculate advanced options data with Greeks and additional metrics
     """
@@ -377,7 +456,7 @@ if __name__ == "__main__":
         logger.info(f"Retrieved current day data: {len(current_day)} rows")
         # Find similar historical patterns
         similar_history, threshold = find_sim_history(current_day, ticker)
-        prediction = pred_ret(similar_history)
+        prediction = OLD_pred_ret(similar_history)
         
         # Extract prediction components
         avg_ret, confidence_interval, std_ret = prediction
@@ -390,7 +469,7 @@ if __name__ == "__main__":
         print("=" * 60)
         print(f"SIMILARITY ANALYSIS FOR {ticker}")
         print("=" * 60)
-        print(f"Reference Date: {reference_date} at {time}")
+        print(f"Reference Date: {reference_date} at {reference_time}")
         print(f"Similar Historical Patterns Found: {len(similar_history)}")
         print()
         
