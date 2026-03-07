@@ -287,20 +287,24 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
         price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         buy_recommendation = ""
         prob_profit, expected_profit, break_even_price, expected_value = pred_ret(similar_history, S, K, price, option_switch)
-        if expected_value > 0:
-            buy_recommendation = "Yes"
+        if expected_value > 1:
+            buy_recommendation = "STRONG Buy"
+        elif expected_value > 0:
+            buy_recommendation = "Buy"
+        elif expected_value > -1:
+            buy_recommendation = "Sell"
         else:
-            buy_recommendation = "No"
+            buy_recommendation = "STRONG Sell"
         rows.append({
             "Strike": K,
             "Type": option_type.capitalize(),
             "Time to Expiration": f"{TOE_minutes:.0f} minutes",
-            "Theoretical Price": f"${price:.2f}",
+            "Premium": f"${price:.2f}",
             "Break-even": f"${break_even_price:.2f}",
             "Prob. Profit": f"{prob_profit:.1%}",
             "Exp. Profit": f"${expected_profit:.2f}",
             "Exp. Value": f"${expected_value:.2f}",
-            "Buy?": buy_recommendation
+            "Buy?": f"{buy_recommendation}"
         })
         K+=2.5
     
@@ -310,13 +314,13 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
     # Apply row-wise styling based on Buy? column
     def style_rows(row):
         buy_value = row['Buy?']
-        if buy_value == "STRONG YES":
+        if buy_value == "STRONG Buy":
             return ['background-color: #006400; color: white;'] * len(row)  # dark green
-        elif buy_value == "Yes":
+        elif buy_value == "Buy":
             return ['background-color: #90ee90; color: black;'] * len(row)  # light green
-        elif buy_value == "No":
+        elif buy_value == "Sell":
             return ['background-color: #ffcccb; color: black;'] * len(row)  # light red
-        elif buy_value == "STRONG NO":
+        elif buy_value == "STRONG Sell":
             return ['background-color: #b22222; color: white;'] * len(row)  # firebrick/dark red
         else:
             return [''] * len(row)  # no styling

@@ -88,7 +88,7 @@ with col3:
     option_type = st.selectbox(
         "Option Type", 
         options=["Call", "Put"],
-        index=1,
+        index=0,
         help="Select Call or Put options"
     )
 option_switch = option_type == "Call"
@@ -98,7 +98,7 @@ summ_table_placeholder = None
 
 with tab3:
     st.subheader("Advanced Table")
-    empty_adv_table = pd.DataFrame(columns=["Strike", "Type", "Time to Expiration", "Bid", "Ask", "Volume", "Implied Vol", "Theoretical Price", "Delta", "Gamma", "STD", "Buy?", "Probability ITM @ Exp.", "ATM price"])
+    empty_adv_table = pd.DataFrame(columns=["Strike", "Type", "Time to Expiration", "Bid", "Ask", "Volume", "Implied Vol", "Premium", "Delta", "Gamma", "STD", "Buy?", "Probability ITM @ Exp.", "ATM price"])
     adv_table_placeholder = st.empty()
     adv_table_placeholder.dataframe(empty_adv_table, use_container_width=True)
 
