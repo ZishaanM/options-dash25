@@ -13,6 +13,8 @@ logger = zu.get_logger(__name__)
 
 # Default ticker - can be overridden when calling functions
 DEFAULT_TICKER = "SPY"
+ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
+ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
 
 @st.cache_data
 def load_data():
@@ -291,7 +293,7 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
     # Calculate time to expiry in minutes (HHMM format conversion)
     end_time = 1600
     end_hrs, end_mins = end_time // 100, end_time % 100
-    ref_hrs, ref_mins = reference_time // 100, reference_time % 100
+    ref_hrs, ref_mins = ref_time // 100, ref_time % 100
     TOE_minutes = (end_hrs - ref_hrs) * 60 + (end_mins - ref_mins)
     TOE_hours = TOE_minutes / 60  # Convert to hours for Black-Scholes
     
@@ -470,8 +472,6 @@ if __name__ == "__main__":
     try:
         # Load returns data from parquet and filter (convert types to match parquet data)
         returns_df = zu.load_parquet(TABLE_NAME)
-        ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
-        ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
         current_day = returns_df[(returns_df['date'] == ref_date) & (returns_df['time'] == ref_time)].copy()
         logger.info(f"Retrieved current day data: {len(current_day)} rows")
         # Find similar historical patterns
