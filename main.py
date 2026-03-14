@@ -112,8 +112,9 @@ def find_sim_history(reference_day: pd.DataFrame,
     logger.info(f"Initial threshold: {threshold}")
     
     for i in range(100):
-        # Filter by time
+        # Filter by time & date
         df = returns_df[returns_df['time'] == curr_time].copy()
+        df = df[(df['date'] < int(reference_day['date'].iloc[-1]))]
         
         # Apply threshold filters
         df = df[
@@ -122,7 +123,7 @@ def find_sim_history(reference_day: pd.DataFrame,
             (abs(df['ret_from_high'] - ret_from_high) < threshold) &
             (abs(df['ret_from_low'] - ret_from_low) < threshold)
         ]
-        
+
         # Calculate similarity scores
         df['diff_open'] = abs(df['ret_from_open'] - ret_from_open)
         df['diff_p_close'] = abs(df['ret_from_p_close'] - ret_from_p_close)
@@ -167,28 +168,43 @@ def pred_ret(similar_history: pd.DataFrame, current_price: float, strike_price: 
     logger.info(f"Calculating empirical predictions from {len(similar_history)} similar patterns")
 
     close_returns = similar_history["ret_to_close"].tolist()
+    pnl_list = []
     
     if is_call:
-        # Call: profitable if final_price > strike + premium
         break_even_price = strike_price + premium
-        break_even_return = (break_even_price - current_price) / current_price
-        profit_list = [current_price * (1 + r) - break_even_price 
-                       for r in close_returns if r > break_even_return]
+        strike_return = (strike_price - current_price) / current_price
+        
+        for r in close_returns:
+            final_price = current_price * (1 + r)
+            if r > strike_return:
+                # ITM: get intrinsic value minus premium paid
+                pnl_list.append((final_price - strike_price) - premium)
+            else:
+                # OTM: lose full premium
+                pnl_list.append(-premium)
     else:
-        # Put: profitable if final_price < strike - premium
         break_even_price = strike_price - premium
-        break_even_return = (break_even_price - current_price) / current_price
-        profit_list = [break_even_price - current_price * (1 + r) 
-                       for r in close_returns if r < break_even_return]
+        strike_return = (strike_price - current_price) / current_price
+        
+        for r in close_returns:
+            final_price = current_price * (1 + r)
+            if r < strike_return:
+                # ITM: get intrinsic value minus premium paid
+                pnl_list.append((strike_price - final_price) - premium)
+            else:
+                # OTM: lose full premium
+                pnl_list.append(-premium)
     
+    # EV is the mean P&L across all scenarios
+    expected_value = np.mean(pnl_list) if pnl_list else 0.0
+    
+    # Stats for display
+    profit_list = [p for p in pnl_list if p > 0]
     num_profitable = len(profit_list)
     prob_profit = num_profitable / len(similar_history) if len(similar_history) > 0 else 0
-    
-    # Expected profit when profitable (in dollars)
     expected_profit = np.mean(profit_list) if profit_list else 0.0
-    expected_value = (prob_profit * expected_profit) - ((1 - prob_profit) * premium)
 
-    logger.info(f"Break-even price: ${break_even_price:.2f} (return needed: {break_even_return:.4f})")
+    logger.info(f"Break-even price: ${break_even_price:.2f} (strike return: {strike_return:.4f})")
     logger.info(f"Probability of profit: {prob_profit:.2%} ({num_profitable}/{len(similar_history)})")
     logger.info(f"Expected profit (if profitable): ${expected_profit:.2f}")
     
@@ -270,7 +286,7 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
     """
     rows = []
     S = current_price
-    K = round(S - 10)
+    K = round(S - 22.5)
     
     # Calculate time to expiry in minutes (HHMM format conversion)
     end_time = 1600
@@ -283,7 +299,7 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
     sigma = implied_vol()
     option_type = "call" if option_switch else "put"
     
-    for i in range(8):        
+    for i in range(18):        
         price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         buy_recommendation = ""
         prob_profit, expected_profit, break_even_price, expected_value = pred_ret(similar_history, S, K, price, option_switch)
@@ -502,7 +518,7 @@ if __name__ == "__main__":
         print("-" * 50)
         display_cols = ['date', 'ret_from_open', 'ret_from_p_close', 'ret_from_high', 'ret_from_low', 'ret_to_close']
         if all(col in similar_history.columns for col in display_cols):
-            similar_display = similar_history[display_cols].head()
+            similar_display = similar_history[display_cols].head().copy()
             # Format the dataframe for better display
             for col in ['ret_from_open', 'ret_from_p_close', 'ret_from_high', 'ret_from_low', 'ret_to_close']:
                 if col in similar_display.columns:

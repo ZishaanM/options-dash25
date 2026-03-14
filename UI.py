@@ -59,6 +59,7 @@ with tab1:
             selected_time = st.time_input("Reference Time", value=dt_time(13, 00), step=60)
             time = selected_time.hour * 100 + selected_time.minute
         reference_date = f"{year}{month:02d}{day:02d}"
+        reference_time = time  # Update reference_time with user-selected time
         ticker = user_ticker.upper() if user_ticker else "SPY"
         dayofweek = datetime(year, month, day).weekday()
         returns_df_check = load_data()
@@ -73,10 +74,11 @@ current_day = None
 similar_history = None
 logger.info("vars initialized to None")
 
-# Set reference_date for realtime mode to today's date
+# Set reference_date and reference_time for realtime mode to today's date/time
 if realtime_toggle:
     today = datetime.now()
     reference_date = f"{today.year}{today.month:02d}{today.day:02d}"
+    reference_time = time  # Use current time calculated at line 27
     
 formatted_reference_date = pd.to_datetime(reference_date, format='%Y%m%d').strftime('%B %d, %Y')  # Time as integer (1300 = 1:00 PM)
 logger.info("params initialized")
@@ -306,7 +308,7 @@ try:
             if 'ret_to_close' in current_day.columns:
                 actual_ret = current_day['ret_to_close'].iloc[0]
                 st.write(f"**Actual Return to Close:** {actual_ret:.4f} ({actual_ret*100:.2f}%)")
-                st.write(f"**Prediction Error:** {abs(actual_ret - avg_ret):.4f} ({abs(actual_ret - avg_ret)*100:.2f}%)")
+                st.write(f"**Prediction Error:** {abs(actual_ret - avg_ret)*10000:.2f} bps")
     else:
         logger.warning("No similar historical patterns found")
         
