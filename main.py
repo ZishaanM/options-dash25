@@ -16,6 +16,9 @@ DEFAULT_TICKER = "SPY"
 ref_date = int(reference_date) if isinstance(reference_date, str) else reference_date
 ref_time = int(reference_time) if isinstance(reference_time, str) else reference_time
 
+#Model error to be taken into account when providing recommendations (0.59%)
+ERROR = 0.0059
+
 @st.cache_data
 def load_data():
     return zu.load_parquet('returns')
@@ -305,14 +308,13 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
         price = black_scholes_price(S, K, TOE_hours, r, sigma, option_type)
         buy_recommendation = ""
         prob_profit, expected_profit, break_even_price, expected_value = pred_ret(similar_history, S, K, price, option_switch)
-        if expected_value > 1:
-            buy_recommendation = "STRONG Buy"
-        elif expected_value > 0:
+        ERROR_dollars = ERROR * S
+        if  expected_value > 0 + ERROR_dollars:
             buy_recommendation = "Buy"
-        elif expected_value > -1:
-            buy_recommendation = "Sell"
+        elif expected_value > (-1 * ERROR_dollars):
+            buy_recommendation = "---"
         else:
-            buy_recommendation = "STRONG Sell"
+            buy_recommendation = "Sell"
         rows.append({
             "Strike": K,
             "Type": option_type.capitalize(),
@@ -340,6 +342,8 @@ def calc_table_data(similar_history: pd.DataFrame, current_price: float, option_
             return ['background-color: #ffcccb; color: black;'] * len(row)  # light red
         elif buy_value == "STRONG Sell":
             return ['background-color: #b22222; color: white;'] * len(row)  # firebrick/dark red
+        elif buy_value == "---":
+            return ['background-color: #808080; color: black;'] * len(row)  # gray
         else:
             return [''] * len(row)  # no styling
     

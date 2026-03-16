@@ -97,13 +97,6 @@ option_switch = option_type == "Call"
 
 # Create empty table placeholders that will be populated later
 summ_table_placeholder = None
-'''
-with tab3:
-    st.subheader("Advanced Table")
-    empty_adv_table = pd.DataFrame(columns=["Strike", "Type", "Time to Expiration", "Bid", "Ask", "Volume", "Implied Vol", "Premium", "Delta", "Gamma", "STD", "Buy?", "Probability ITM @ Exp.", "ATM price"])
-    adv_table_placeholder = st.empty()
-    adv_table_placeholder.dataframe(empty_adv_table, use_container_width=True)
-'''
 try:
     # Load data from parquet
     logger.info("Loading data from parquet...")
@@ -287,12 +280,7 @@ try:
             st.subheader("Summary Table")
             populated_summ_table = calc_table_data(similar_history, current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
             st.dataframe(populated_summ_table, use_container_width=True)
-        '''
-        with tab3:
-            # Populate the advanced table with actual data
-            populated_adv_table = calc_advanced_table_data(similar_history, current_price, option_switch, lower_price, upper_price, lower_1sigma, upper_1sigma)
-            adv_table_placeholder.dataframe(populated_adv_table, use_container_width=True)
-        '''
+
         with tab2:
             st.header("Prediction Results")
             
